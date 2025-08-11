@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Pong — Top-AI vs You</title>
+  <style>
+    :root{--bg:#0b0b12;--fg:#e6edf3;--accent:#4dd0e1}
+    html,body{height:100%;margin:0;font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--fg);}
+    .wrap{display:grid;place-items:center;height:100%;padding:20px;box-sizing:border-box}
+    canvas{background:#061021;border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,.6)}
+    .hud{width:800px;display:flex;justify-content:space-between;align-items:center;margin-top:12px;gap:12px}
+    .controls{display:flex;gap:8px;align-items:center}
+    label{font-size:13px;color:#b9c7d4}
+    input[type=range]{width:160px}
+    button{background:var(--accent);border:none;color:#022;padding:6px 10px;border-radius:6px;cursor:pointer}
+    .scores{font-family:monospace;font-size:18px}
+    small{color:#90a3b8}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <canvas id="c" width="1600" height="1200"></canvas>
+    <div class="hud">
+      <div class="controls">
+        <label>clanker difficulty</label>
+        <input id="difficulty" type="range" min="0" max="1" step="0.01" value="0.7">
+        <small id="diffVal">0.70</small>
+        <button id="reset">Reset</button>
+      </div>
+      <div class="scores"><span id="topScore">clanker: 0</span>  —  <span id="botScore">you: 0</span></div>
+      <div class="controls"><small>Use mouse or ← → keys to move</small></div>
+    </div>
+  </div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+// Gameplay parameters
+const paddleW = 140, paddleH = 12;
+const maxScore = 7; // optional winning score (not enforced)
+
+let difficultySlider = document.getElementById('difficulty');
+let diffVal = document.getElementById('diffVal');
+let resetBtn = document.getElementById('reset');
+let topScoreEl = document.getElementById('topScore');
+let botScoreEl = document.getElementById('botScore');
+
+let state = {
+  topScore: 0,
+  botScore: 0,
+  running: true
+};
+
+// paddles
+let player = {
+  x: (W - paddleW) / 2,
+  y: H - 30,
+  w: paddleW,
+  h: paddleH,
+  speed: 9
+};
+let ai = {
+  x: (W - paddleW) / 2,
+  y: 18,
+  w: paddleW,
+  h: paddleH,
+  maxSpeed: 7
+};
+
+// ball
+let ball = {
+  x: W / 2,
+  y: H / 2,
+  r: 8,
+  speed: 6,
+  vx: 4,
+  vy: 4
+};
+
+// input
+let mouseX = player.x + player.w / 2;
+let left = false, right = false;
+
+// audio (simple beeps using WebAudio)
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+function beep(freq = 440, time = 0.05, type = 'sine') {
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = type; o.frequency.value = freq;
+  o.connect(g); g.connect(audioCtx.destination);
+  g.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.12, audioCtx.currentTime + 0.01);
+  o.start();
+  g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + time);
+  o.stop(audioCtx.currentTime + time + 0.02);
+}
+
+// Color + word variables
+let hue = 200;
+const saturation = 60;
+const lightness = 50;
+const hueStep = 8;
+
+let wordScale = 1;       // current scale
+let targetScale = 1;     // desired scale (set by shiftBg)
+const scaleSpeed = 0.20; // easing speed (0..1)
+
+// Fixed words array syntax
+const words = [
+"abortion", "anal", "analsex", "angie", "anus", "AIDS", "ape shit", "areola", "arse", "arsehole", "ass", "ass bagger", "ass blaster", "ass clown", "asscowboy", "asses", "assfuck", "assfucker", "asshat", "asshole", "assholes", "assjockey", "asskiss", "asskisser", "assklown", "asslick", "asslicker", "ass lover", "assman", "ass monkey", "assmunch", "assmuncher", "ass packer", "ass pirate", "ass puppies", "ass ranger", "ass whore", "asswipe", "babies", "backdoor", "backdoorman", "backseat", "badfuck", "batshit", "ball licker", "balls", "ballsack", "banging", "baptist", "barelylegal", "barf", "barfface", "bastard", "bazongas", "bazooms", "beaner", "beastiality", "beatoff", "beat off", "beatyourmeat", "beaver", "bestial", "bestiality", "bellend", "biatch", "bible", "bicurious", "bigass", "bigbastard", "bigbutt", "bisexual", "bitch", "bitcher", "bitches", "bitchez", "bitchin", "bitchslap", "bitchy", "biteme", "blackout", "blind", "blow", "blowjob", "blue waffle", "boang", "bogan", "bohunk", "bollick", "bollock", "bondage", "boner", "bob", "bobs", "boob", "boobies", "booba", "boobs", "booby", "boody", "boong", "boonga", "boonie", "booty", "bootycall", "bountybar", "bra", "brea5t", "breast", "breastjob", "breastlover", "breastman", "brothel", "bugger", "buggered", "buggery", "bullcrap", "bulldike", "bulldyke", "bullshit", "bumblefuck", "bumfuck", "bunga", "bunghole", "buried", "butchbabes", "butchdike", "butchdyke", "butt", "buttbang", "butt-bang", "buttface", "buttfuck", "butt-fuck", "buttfucker", "butt-fucker", "buttfuckers", "butt-fuckers", "butthead", "buttman", "buttmunch", "buttmuncher", "buttpirate", "buttplug", "buttstain", "byatch", "cacker", "cameljockey", "cameltoe", "cancer", "carpetmuncher", "catholic", "catholics", "cervix", "chav", "cherrypopper", "chickslick", "child", "children", "choad", "chode", "christ", "christian", "church", "clamdigger", "clamdiver", "clit", "clitoris", "cock", "cockblock", "cockblocker", "cockcowboy", "cockfight", "cockhead", "cockknob", "cocklicker", "cocklover", "cocknob", "cockqueen", "cockrider", "cocksman", "cocksmith", "cocksmoker", "cocksuck", "cocksucker", "cocksucking", "cocktease", "circumcision", "cocky", "coitus", "clusterfuck", "commie", "communist", "condom", "copulate", "cornhole", "crabs", "crack", "crack-whore", "crap", "crapola", "crapper", "crappy", "creamy", "crotch", "crotchjockey", "crotchmonkey", "crotchrot", "cum", "cumbubble", "cumfest", "cumjockey", "cumm", "cummer", "cumming", "cumquat", "cumqueen", "cumshot", "cunn", "cunnilingus", "cunntt", "cunt", "cunteyed", "cuntfuck", "cuntfucker", "cuntlick", "cuntlicker", "cuntlicking", "cuntsucker", "cyberslimer", "daddy", "dagnabbit", "deepthroat", "defecate", "dick", "dickbrain", "dickforbrains", "dickhead", "diarrhea", "dickless", "dicklick", "dicklicker", "dickman", "dickwad", "dickweed", "diddle", "dike", "dildo", "dingleberry", "dink", "dipshit", "dipstick", "dirty", "dix", "dixiedike", "dixiedyke", "doggiestyle", "doggystyle", "dong", "doodoo", "doo-doo", "dope", "dilf", "douche", "douche canoe", "dragqueen", "dragqween", "dripdick", "drug", "dumb", "dumbass", "dumbbitch", "dumbfuck", "dyefly", "dyke", "easyslut", "eatballs", "eatme", "eatpussy", "ecstacy", "ejaculate", "ejaculated", "ejaculating", "ejaculation", "enema", "enemy", "erect", "erection", "escort", "excrement", "facefucker", "faeces", "fag", "fagging", "faggot", "fagot", "fairies", "fairy", "fannyfucker", "fart", "farted", "farting", "farty", "fastfuck", "fat", "fat-ass", "fatfuck", "fatfucker", "fatso", "feces","fellatio", "fetish", "fingerfood", "fingerfuck", "fingerfucked", "fingerfucker", "fingerfuckers", "fingerfucking", "fiddlesticks", "fister", "fistfuck", "fistfucked", "fistfucker", "fistfucking", "fisting", "flange", "flasher", "flatulence", "fok", "fondle", "foot action", "footfuck", "footfucker", "footlicker", "foreskin", "forni", "fornicate", "foursome", "fourtwenty", "freakfuck", "freakyfucker", "fu", "fuc", "fucck", "fuck", "fucka", "fuckable", "fuckbag", "fuckboy", "fuckbuddy", "fucked", "fuckedup", "fucker", "fuckers", "fuckface", "fuckfest", "fuckfriend", "fuckhead", "fuckin", "fuckin a", "fucking", "fuckingbitch", "fuckinnuts", "fuckinright", "fuckit", "fuckknob", "fuck me", "fuck me hard", "fuckmonkey", "fuckoff", "fuckpig", "fucks", "fucktard", "fuckwhore", "fuckyou", "fudgepacker", "fugly", "fuk", "fuks", "futanari", "fungus", "fuuck", "gangbang", "gangbanged", "gangbanger", "gay", "gaymuthafuckinwhore", "gaysex", "geez", "geezer", "geni", "genital", "get it on", "gin", "girls", "givehead", "glazeddonut", "goatse", "gob", "god", "goon", "gooner", "gooning", "goddammit", "goddamn", "goddamned", "goddamnit", "goddamnmuthafucker", "goldenshower", "gonorrhea", "gonzagas", "gooch", "greaseball", "gross", "gilf", "grostulation", "gubba", "gummer", "grool", "handjob", "hapa", "harder", "hardon", "harem", "hentai", "herpes", "heterosexual", "hillbillies", "hindoo", "hitler", "HIV", "ho", "hobo", "hodgie", "hoes", "hole", "holestuffer", "homo", "homobangers", "homosexual", "honger", "honk", "honkers", "honkey", "honky", "hook", "hooker", "hookers", "hooters", "hore", "horn", "horney", "horniest", "horny", "horseshit", "hosejob", "hoser", "hotdamn", "hot dog", "hotpussy", "husky", "hussy", "hustler", "hymen", "hymie", "iblowu", "idiot", "incest", "insest", "intercourse", "interracial", "in the ass", "inthebuff", "jackass", "jackoff", "jackshit", "jebus", "jeez", "jerkoff", "jesus", "jesuschrist", "jigaboo", "jihad", "jijjiboo", "jimfish", "jism", "jiz", "jizim", "jizjuice", "jizm", "jizz", "jizzim", "jizzum", "juggalo", "jugs", "junglebunny", "kid", "kink", "kinky", "kissass", "kkk", "knockers", "kock", "kondum", "krap", "krappy", "kum", "kumbubble", "kummer", "kumquat", "kunt", "lactate", "laid", "lapdance", "lesbain", "lesbayn", "lesbian", "lemonparty", "lesbin", "lesbo", "lezbe", "lezbo", "lez", "lezzo", "libido", "licker", "lickme", "limey", "limpdick", "lingerie", "livesex", "looser", "loser", "lotion", "lovebone", "lovegoo", "lovegun", "lovejuice", "lovemuscle", "lovepistol", "loverocket", "lubejob", "luckycammeltoe", "macaca", "magicwand", "mams", "manpaste", "mastabate", "mastabater", "masterblaster", "mastrabator", "masturbate", "masturbating", "mattressprincess", "meat beater", "milf", "mofo", "moles", "molest", "molestation", "molester", "molestor", "moneyshot", "mooncricket", "mormon", "moron", "mothafucka", "mothafuckaz", "mothafucked", "mothafucker", "mothafuckin", "mothafucking", "mothafuckings", "motherfuck", "motherfucked", "motherfucker", "motherfuckin", "motherfucking", "motherfuckings", "motherlovebone", "minge", "muff", "muffdive", "muffdiver", "muffindiver", "mufflikcer", "muncher", "naked", "nasty", "nastybitch", "nastyho", "nastyslut", "nastywhore", "nip", "nipple", "nipplering", "nonce", "nookie", "nude", "nutfucker", "nymph", "on the rag", "oral", "orgasim", "orgasm", "orgies", "orgy", "osama", "pansies", "pansy", "panti", "panties", "pearlnecklace", "pecker", "peckerwood", "pee", "pedo", "pedophile", "peehole", "pee-pee", "peep show", "pendy", "penetration", "peni5", "penile", "penis", "penises", "penthouse", "period", "perv", "phonesex", "phuk", "phuked", "phuking", "phukked", "phukking", "phungky", "phuq", "pi55", "pickaninny", "pimp", "pencil dick", "pindick", "piss", "pissed", "pisser", "pisshead", "pissin", "pissing", "pissoff", "pig", "pixie", "pixy", "playboy", "playgirl", "pocha", "pocho", "pocketpool", "poo", "poon", "the pope", "poontang", "poop", "pooper", "pooperscooper", "pooping", "poorwhitetrash", "porn", "porno", "pornography", "prick", "prickhead", "prostitute", "pu55i", "pu55y", "pube", "pubic", "pubic lice", "puke", "puntang", "puss", "pussie", "pussies", "pussy", "pussycat", "pussyeater", "pussyfucker", "pussylicker", "pussylips", "pussylover", "pussypounder", "pusi", "quashie", "queef", "queer", "quickie", "quim", "rabbi", "racial", "rearend", "rearentry", "rectum", "redlight", "redneck", "reject", "remains", "rentafuck", "retard", "retarded", "ribbed", "rimjob", "rimming", "rump", "russki", "smackdaddy", "scag", "scallywag", "scat", "schlong", "screw", "screwyou", "scrotum", "scum", "semen", "sex", "sexed", "sexfarm", "sexhound", "sexhouse", "sexpot", "sexslave", "sexting", "sext", "sextoy", "sextoys", "sexual", "sexually", "sexwhore", "sexy", "sexy momma", "sibling", "shag", "shagging", "shawtypimp", "shit", "shitcan", "shitdick", "shite", "shiteater", "shited", "shitface", "shitfaced", "shitfit", "shitforbrains", "shitfuck", "shitfucker", "shitfull", "shithead", "shithouse", "shiting", "shitlist", "shitola", "shits", "shitstain", "shitted", "shitter", "shitting", "shitty", "shortfuck", "sick", "sissy", "sixsixsix", "sixty-nine", "sixtyniner", "skank", "skankbitch", "skankfuck", "skankwhore", "skanky", "skankybitch", "skankywhore", "skinflute", "skum", "skumbag", "slanteye", "slave", "sleezebag", "sleezeball", "slime", "slimeball", "slimebucket", "slut", "sluts", "slutty", "slutwhore", "smack", "smackthemonkey", "smeg", "smegma", "smut", "snatch", "snatchpatch", "snot", "sodomite", "sodomize", "sodomy", "sonofabitch", "sonofbitch", "sod", "soviet", "spank", "spastic", "spankthemonkey", "sperm", "spermacide", "spermbag", "spermherder", "spick", "spig", "spigotty", "spik", "spit", "spitter", "splittail", "spooge", "spreadeagle", "spunk", "spunky", "squaw", "stagg", "STD", "stiffy", "strapon", "stripclub", "stroke", "stroking", "stupid", "stupidfuck", "stupidfucker", "suck", "suckdick", "sucker", "suckme", "suckmyass", "suckmydick", "suckmytit", "suckoff", "swallow", "swallower", "swastika", "syphilis", "taff", "tampon", "tang", "tard", "teat", "teabagging", "testes", "testicle", "testicles", "thicklips", "thirdeye", "thirdleg", "threesome", "threeway", "tinkle", "tit", "titfuck", "titfucker", "titfuckin", "titjob", "titlicker", "titlover", "tits", "tittie", "titties", "titty", "toddler", "toilet", "tonguethruster", "tongue", "tonguetramp", "tosser", "towelhead", "trailertrash", "tramp", "trannie", "tranny", "transexual", "transsexual", "transvestite", "tubgirl", "tunneloflove", "turd", "turn-on", "thundercunt", "twat", "twink", "twinkie", "twobitwhore", "uck", "unfuckable", "upskirt", "uptheass", "upthebutt", "urinary", "urinate", "urine", "usama", "uterus", "vag", "vagene", "vagina", "vaginal", "vatican", "vibrater", "vibrator", "virgin", "virginbreaker", "vomit", "vulva", "wab", "wank", "wanker", "wanking", "wankstain", "weenie", "weewee", "welcher", "wetback", "wetspot", "whacker", "whiz", "whore", "whorefucker", "whorehouse", "willie", "williewanker", "willy", "wuss", "xtc", "xxx", "yankee", "yomama", "yourmama"
+];
+let currentWord = words[0];
+
+// Speech Synthesis setup
+let availableVoices = [];
+let voicesLoaded = false;
+
+// Promise-based voice loader to guarantee voices are ready before speaking
+function waitForVoices() {
+  return new Promise(resolve => {
+    let voices = window.speechSynthesis.getVoices();
+    if (voices.length !== 0) {
+      availableVoices = voices;
+      voicesLoaded = true;
+      console.log("Voices loaded:", voices.map(v => v.name));
+      resolve();
+    } else {
+      window.speechSynthesis.onvoiceschanged = () => {
+        availableVoices = window.speechSynthesis.getVoices();
+        voicesLoaded = true;
+        console.log("Voices loaded (onvoiceschanged):", availableVoices.map(v => v.name));
+        resolve();
+      };
+    }
+  });
+}
+
+// Unlock audio context and speech synthesis on first user gesture (required by browsers)
+function unlockAudio() {
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  window.speechSynthesis.resume();
+  window.removeEventListener('pointerdown', unlockAudio);
+}
+window.addEventListener('pointerdown', unlockAudio);
+
+// Speech function: speak a word with voice filtered by gender and rate by ball speed and word length
+async function speakWord(word, isPlayerHit, ballSpeed) {
+  if (!window.speechSynthesis) return;
+  if (!voicesLoaded) await waitForVoices();
+
+  const utter = new SpeechSynthesisUtterance(word);
+
+  // Gender filter (only female for player hits)
+  const genderFilter = isPlayerHit ? 'female' : 'male';
+  const filteredVoices = availableVoices.filter(v => v.name.toLowerCase().includes(genderFilter));
+  utter.voice = filteredVoices.length ? filteredVoices[0] : availableVoices[0];
+
+  // Map ballSpeed 4-16 → base rate 0.6-2.1
+  const minSpeed = 4, maxSpeed = 16;
+  const clampedSpeed = Math.min(Math.max(ballSpeed, minSpeed), maxSpeed);
+  const baseRate = 0.6 + ((clampedSpeed - minSpeed) / (maxSpeed - minSpeed)) * (1.9 - 0.6);
+
+  // Word length factor (3-8 chars mapped to 0.8 - 1.2 multiplier)
+  const minLength = 3, maxLength = 15;
+  const len = word.length;
+  const lengthFactor = len <= minLength ? 0.8
+                     : len >= maxLength ? 1.2
+                     : 0.8 + ((len - minLength) / (maxLength - minLength)) * 0.4;
+
+  utter.rate = baseRate * lengthFactor;
+
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(utter);
+  console.log(`Speaking: "${word}" rate: ${utter.rate.toFixed(2)} voice: ${utter.voice.name}`);
+}
+
+// Function to change both color + word
+function shiftBg() {
+  hue = (hue + hueStep) % 360;
+  canvas.style.backgroundColor = `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+  currentWord = words[Math.floor(Math.random() * words.length)];
+
+  wordScale = 0.08;   // very small start
+  targetScale = 1.0;  // grow toward 1
+}
+
+// helpers
+function resetBall(winner) {
+  ball.x = W / 2; ball.y = H / 2;
+  const dir = winner === 'player' ? -1 : 1;
+  ball.speed = 6;
+  ball.vx = (Math.random() * 3 - 1.5);
+  ball.vy = dir * (3 + Math.random() * 2);
+}
+
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+
+// collision
+function rectCircleCollide(rx, ry, rw, rh, cx, cy, cr) {
+  const closestX = clamp(cx, rx, rx + rw);
+  const closestY = clamp(cy, ry, ry + rh);
+  const dx = cx - closestX, dy = cy - closestY;
+  return (dx * dx + dy * dy) <= (cr * cr);
+}
+
+// AI: predictive but imperfect
+function aiStep(dt) {
+  const difficulty = parseFloat(difficultySlider.value);
+  if (ball.y > H * 0.4) {
+    const centerX = W / 2;
+    const idleSpeed = 2;
+    if (ai.x + ai.w / 2 < centerX - 10) ai.x += idleSpeed;
+    else if (ai.x + ai.w / 2 > centerX + 10) ai.x -= idleSpeed;
+    return;
+  }
+  let predictedX = ball.x;
+  if (ball.vy < 0) {
+    let simX = ball.x, simY = ball.y, simVx = ball.vx, simVy = ball.vy;
+    for (let i = 0; i < 100; i++) {
+      simX += simVx; simY += simVy;
+      if (simX - ball.r <= 0) { simX = ball.r; simVx *= -1; }
+      if (simX + ball.r >= W) { simX = W - ball.r; simVx *= -1; }
+      if (simY - ball.r <= ai.y + ai.h) {
+        predictedX = simX; break;
+      }
+    }
+  } else {
+    predictedX = W / 2 + (Math.random() - 0.5) * 150 * (1 - difficulty);
+  }
+  predictedX = Math.min(Math.max(predictedX, ai.w / 2), W - ai.w / 2);
+  const center = ai.x + ai.w / 2;
+  let dist = predictedX - center;
+  const maxSpeed = 3 + 4 * difficulty;
+  let desiredSpeed = clamp(dist * 0.1, -maxSpeed, maxSpeed);
+  ai.x += desiredSpeed;
+  ai.x = clamp(ai.x, 0, W - ai.w);
+}
+
+// player step
+function playerStep() {
+  const target = mouseX - player.w / 2;
+  let kb = 0;
+  if (left) kb -= player.speed;
+  if (right) kb += player.speed;
+  player.x += (target + kb - player.x) * 0.25;
+  player.x = clamp(player.x, 0, W - player.w);
+}
+
+// ball physics
+function ballStep() {
+  ball.x += ball.vx;
+  ball.y += ball.vy;
+
+  if (ball.x - ball.r <= 0) { ball.x = ball.r; ball.vx *= -1; beep(300, 0.03); }
+  if (ball.x + ball.r >= W) { ball.x = W - ball.r; ball.vx *= -1; beep(300, 0.03); }
+
+  if (ball.vy > 0) {
+    if (rectCircleCollide(player.x, player.y, player.w, player.h, ball.x, ball.y, ball.r)) {
+      ball.y = player.y - ball.r - 0.1;
+      ball.vy *= -1;
+      const hitPos = (ball.x - (player.x + player.w / 2)) / (player.w / 2);
+      ball.vx += hitPos * 2.5;
+      ball.vx = clamp(ball.vx, -12, 12);
+      ball.vy = -Math.abs(ball.vy) - 0.4;
+      ball.speed = Math.hypot(ball.vx, ball.vy);
+      beep(700, 0.04, 'square');
+      shiftBg();
+      speakWord(currentWord, true, ball.speed);
+    }
+  } else {
+    if (rectCircleCollide(ai.x, ai.y, ai.w, ai.h, ball.x, ball.y, ball.r)) {
+      ball.y = ai.y + ai.h + ball.r + 0.1;
+      ball.vy *= -1;
+      const hitPos = (ball.x - (ai.x + ai.w / 2)) / (ai.w / 2);
+      ball.vx += hitPos * 2.5;
+      ball.vx = clamp(ball.vx, -12, 12);
+      ball.vy = Math.abs(ball.vy) + 0.4;
+      ball.speed = Math.hypot(ball.vx, ball.vy);
+      beep(500, 0.04, 'square');
+      shiftBg();
+      speakWord(currentWord, true, ball.speed);
+    }
+  }
+
+  if (ball.y - ball.r > H) {
+    state.topScore++;
+    topScoreEl.textContent = `AI: ${state.topScore}`;
+    beep(220, 0.18, 'sine');
+    resetBall('ai');
+  }
+  if (ball.y + ball.r < 0) {
+    state.botScore++;
+    botScoreEl.textContent = `You: ${state.botScore}`;
+    beep(880, 0.18, 'sine');
+    resetBall('player');
+  }
+}
+
+// draw
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 10]);
+  ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke(); ctx.setLineDash([]);
+
+  wordScale += (targetScale - wordScale) * scaleSpeed;
+
+  ctx.save();
+  ctx.fillStyle = "rgba(255,255,255,0.08)";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  let fontSize = 10;
+  ctx.font = `${fontSize}px 'Courier New', monospace`;
+  let textWidth = ctx.measureText(currentWord).width;
+  while (textWidth < canvas.width * 0.9 && fontSize < canvas.height * 0.9) {
+    fontSize += 2;
+    ctx.font = `${fontSize}px 'Courier New', monospace`;
+    textWidth = ctx.measureText(currentWord).width;
+  }
+
+  ctx.translate(canvas.width / 2, canvas.height / 2);
+  ctx.scale(wordScale, wordScale);
+  ctx.fillText(currentWord, 0, 0);
+  ctx.restore();
+
+  ctx.fillStyle = '#8be9fd';
+  roundRect(ctx, ai.x, ai.y, ai.w, ai.h, 6); ctx.fill();
+  ctx.fillStyle = '#ffd166';
+  roundRect(ctx, player.x, player.y, player.w, player.h, 6); ctx.fill();
+
+  ctx.beginPath(); ctx.fillStyle = '#ffffff'; ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2); ctx.fill();
+
+  ctx.fillStyle = 'rgba(255,255,255,0.08)';
+  ctx.font = '12px monospace';
+  ctx.fillText(`AI: ${state.topScore}`, 10, 20);
+  ctx.fillText(`You: ${state.botScore}`, 10, H - 10);
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+// main loop
+let last = performance.now();
+function loop(now) {
+  const dt = (now - last) / 16.67;
+  last = now;
+  if (!state.running) return;
+  playerStep();
+  aiStep(dt);
+  ballStep();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+// input handlers
+canvas.addEventListener('mousemove', e => {
+  const rect = canvas.getBoundingClientRect();
+  mouseX = e.clientX - rect.left;
+});
+window.addEventListener('keydown', e => { if (e.key === 'ArrowLeft') left = true; if (e.key === 'ArrowRight') right = true; });
+window.addEventListener('keyup', e => { if (e.key === 'ArrowLeft') left = false; if (e.key === 'ArrowRight') right = false; });
+
+// difficulty UI
+difficultySlider.addEventListener('input', () => {
+  diffVal.textContent = parseFloat(difficultySlider.value).toFixed(2);
+  ai.maxSpeed = 4 + 9 * parseFloat(difficultySlider.value);
+});
+resetBtn.addEventListener('click', () => {
+  state.topScore = 0; state.botScore = 0;
+  topScoreEl.textContent = 'AI: 0'; botScoreEl.textContent = 'You: 0';
+  resetBall();
+});
+
+// kickoff
+resetBall();
+diffVal.textContent = parseFloat(difficultySlider.value).toFixed(2);
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
