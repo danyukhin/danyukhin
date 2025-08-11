@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Paddle Word Pong</title>
+<style>
+  body {
+    margin: 0;
+    background: black;
+    color: white;
+    font-family: monospace;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+  #gameCanvas {
+    background: black;
+    display: block;
+  }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas" width="800" height="600"></canvas>
+<div>
+  <span id="topScore">AI: 0</span> | 
+  <span id="botScore">You: 0</span>
+</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const W = canvas.width;
+const H = canvas.height;
+
+// Dictionary of words
+const words = [
+  "ultrasonography", "perpendicularity", "architecture", "simulation",
+  "abstract", "modular", "kinetic", "vector", "flux", "echo",
+  "yankee", "yomama", "xxs"
+];
+let currentWord = words[0];
+
+// Speech Synthesis setup
+let availableVoices = [];
+let voicesLoaded = false;
+function loadVoices() {
+  availableVoices = speechSynthesis.getVoices();
+  voicesLoaded = true;
+}
+speechSynthesis.onvoiceschanged = loadVoices;
+
+// Background hue
+let bgHue = 0;
+
+// Background word scaling
+let wordScale = 0.5;
+let targetScale = 1.0;
+const scaleSpeed = 0.15;
+
+// Player and AI
+const player = {x: W/2-50, y: H-30, w: 100, h: 10, speed: 8};
+const ai = {x: W/2-50, y: 20, w: 100, h: 10, speed: 5};
+
+// Ball
+const ball = {x: W/2, y: H/2, r: 8, vx: 0, vy: 5, speed: 5};
+
+const state = {topScore: 0, botScore: 0};
+const topScoreEl = document.getElementById('topScore');
+const botScoreEl = document.getElementById('botScore');
+
+// Utility
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
+}
+function rectCircleCollide(rx, ry, rw, rh, cx, cy, cr) {
+  const distX = Math.abs(cx - rx - rw/2);
+  const distY = Math.abs(cy - ry - rh/2);
+  if (distX > (rw/2 + cr)) return false;
+  if (distY > (rh/2 + cr)) return false;
+  if (distX <= (rw/2)) return true;
+  if (distY <= (rh/2)) return true;
+  const dx = distX - rw/2;
+  const dy = distY - rh/2;
+  return (dx*dx + dy*dy <= (cr*cr));
+}
+
+// Choose next word depending on ball speed
+function chooseWordForSpeed(speed) {
+  const maxLen = Math.max(3, Math.floor(14 - speed)); 
+  const filtered = words.filter(w => w.length <= maxLen);
+  if (filtered.length > 0) {
+    currentWord = filtered[Math.floor(Math.random() * filtered.length)];
+  } else {
+    currentWord = words[Math.floor(Math.random() * words.length)];
+  }
+}
+
+// Shift background and trigger word pop-in
+function shiftBgAndWord() {
+  bgHue = (bgHue + 20) % 360;
+  chooseWordForSpeed(ball.speed);
+  targetScale = 1.5;
+  wordScale = 0.5;
+}
+
+// Speech synthesis
+function speakWord(word, female, speed) {
+  if (!voicesLoaded) loadVoices();
+  const utter = new SpeechSynthesisUtterance(word);
+  const chosen = availableVoices.find(v => female ? v.name.toLowerCase().includes('female') : v.name.toLowerCase().includes('male')) || availableVoices[0];
+  utter.voice = chosen;
+  const lengthFactor = Math.max(0.5, 2 - word.length / 10);
+  utter.rate = clamp((speed / 5) * lengthFactor, 0.5, 2.5);
+  speechSynthesis.cancel();
+  speechSynthesis.speak(utter);
+}
+
+// Web Audio hit sound
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+function playHitSound(xPos, speed) {
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  const filter = audioCtx.createBiquadFilter();
+
+  osc.type = 'square';
+  osc.frequency.setValueAtTime(300 + speed * 50, audioCtx.currentTime);
+
+  filter.type = 'lowpass';
+  filter.frequency.setValueAtTime(1200, audioCtx.currentTime);
+
+  gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3);
+
+  osc.connect(filter);
+  filter.connect(gain);
+  gain.connect(audioCtx.destination);
+
+  osc.start();
+  osc.stop(audioCtx.currentTime + 0.3);
+}
+
+// Game loop
+function update() {
+  // Move ball
+  ball.x += ball.vx;
+  ball.y += ball.vy;
+
+  // Player controls
+  if (keys['ArrowLeft']) player.x -= player.speed;
+  if (keys['ArrowRight']) player.x += player.speed;
+  player.x = clamp(player.x, 0, W - player.w);
+
+  // AI movement
+  if (ball.x < ai.x + ai.w/2) ai.x -= ai.speed;
+  if (ball.x > ai.x + ai.w/2) ai.x += ai.speed;
+  ai.x = clamp(ai.x, 0, W - ai.w);
+
+  // Paddle collisions
+  if (ball.vy > 0) {
+    if (rectCircleCollide(player.x, player.y, player.w, player.h, ball.x, ball.y, ball.r)) {
+      ball.y = player.y - ball.r - 0.1;
+      ball.vy *= -1;
+      const hitPos = (ball.x - (player.x + player.w/2)) / (player.w/2);
+      ball.vx += hitPos * 2.5;
+      ball.vx = clamp(ball.vx, -12, 12);
+      ball.vy = -Math.abs(ball.vy) - 0.4;
+      ball.speed = Math.hypot(ball.vx, ball.vy);
+      playHitSound(ball.x, ball.speed);
+      shiftBgAndWord();
+      speakWord(currentWord, true, ball.speed);
+    }
+  } else {
+    if (rectCircleCollide(ai.x, ai.y, ai.w, ai.h, ball.x, ball.y, ball.r)) {
+      ball.y = ai.y + ai.h + ball.r + 0.1;
+      ball.vy *= -1;
+      const hitPos = (ball.x - (ai.x + ai.w/2)) / (ai.w/2);
+      ball.vx += hitPos * 2.5;
+      ball.vx = clamp(ball.vx, -12, 12);
+      ball.vy = Math.abs(ball.vy) + 0.4;
+      ball.speed = Math.hypot(ball.vx, ball.vy);
+      playHitSound(ball.x, ball.speed);
+      // AI hit → no word change
+      speakWord(currentWord, false, ball.speed);
+    }
+  }
+
+  // Scoring
+  if (ball.y - ball.r > H) {
+    state.topScore += 1;
+    topScoreEl.textContent = `AI: ${state.topScore}`;
+    resetBall('ai');
+  }
+  if (ball.y + ball.r < 0) {
+    state.botScore += 1;
+    botScoreEl.textContent = `You: ${state.botScore}`;
+    resetBall('player');
+  }
+}
+
+function resetBall(serving) {
+  ball.x = W/2;
+  ball.y = H/2;
+  ball.vx = (Math.random() - 0.5) * 6;
+  ball.vy = serving === 'player' ? 5 : -5;
+  ball.speed = Math.hypot(ball.vx, ball.vy);
+}
+
+function draw() {
+  ctx.fillStyle = `hsl(${bgHue}, 50%, 10%)`;
+  ctx.fillRect(0,0,W,H);
+
+  // Animate scale toward target
+  wordScale += (targetScale - wordScale) * scaleSpeed;
+
+  // Draw background word
+  ctx.save();
+  ctx.fillStyle = "rgba(255,255,255,0.08)";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  let fontSize = 10;
+  ctx.font = `${fontSize}px 'Courier New', monospace`;
+  let textWidth = ctx.measureText(currentWord).width;
+  while (textWidth < canvas.width * 0.9 && fontSize < canvas.height * 0.9) {
+    fontSize += 2;
+    ctx.font = `${fontSize}px 'Courier New', monospace`;
+    textWidth = ctx.measureText(currentWord).width;
+  }
+  ctx.translate(W / 2, H / 2);
+  ctx.scale(wordScale, wordScale);
+  ctx.fillText(currentWord, 0, 0);
+  ctx.restore();
+
+  // Draw paddles
+  ctx.fillStyle = '#8be9fd';
+  roundRect(ctx, ai.x, ai.y, ai.w, ai.h, 6); ctx.fill();
+  ctx.fillStyle = '#ffd166';
+  roundRect(ctx, player.x, player.y, player.w, player.h, 6); ctx.fill();
+
+  // Draw ball
+  ctx.beginPath();
+  ctx.fillStyle = '#ffffff';
+  ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI*2);
+  ctx.fill();
+}
+
+function roundRect(ctx,x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r);
+  ctx.arcTo(x,y,x+w,y,r);
+  ctx.closePath();
+}
+
+const keys = {};
+document.addEventListener('keydown', e => keys[e.key] = true);
+document.addEventListener('keyup', e => keys[e.key] = false);
+
+function gameLoop() {
+  update();
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+gameLoop();
+</script>
+</body>
+</html>
